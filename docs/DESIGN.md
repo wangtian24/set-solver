@@ -54,25 +54,30 @@ A **valid Set** = 3 cards where each attribute is either ALL SAME or ALL DIFFERE
 
 ## Training Data Strategy
 
-### Synthetic Generation (Primary - FREE)
-Generate training images programmatically:
+### ✅ Existing Data (FOUND!)
+We have **1,943 labeled card images** in `training_images/`:
+```
+training_images/{number}/{color}/{shape}/{fill}/*.png
+  - number: one, two, three
+  - color: red, green, blue (blue = purple in standard Set)
+  - shape: diamond, oval, squiggle
+  - fill: empty, full, partial (partial = striped)
+```
+~20-30 images per class (81 classes). Perfect for classifier training!
 
-1. **Card SVGs/PNGs:** Create clean vector art for all 81 cards
+### Synthetic Board Generation (For Detection)
+Use existing card images to generate synthetic "board" images:
+
+1. **Compose boards:** Place 12-15 cards on background images
 2. **Augmentation Pipeline:**
-   - Random backgrounds (tables, floors, etc.)
    - Random orientations (0-360°)
-   - Lighting variations
+   - Random positions (non-overlapping)
+   - Background variations (tables, floors)
+   - Lighting/color jitter
    - Perspective transforms
-   - Partial occlusions
-   - Camera blur/noise
    - Scale variations
 
-**Tools:** Python + PIL/OpenCV + Albumentations
-
-### Real Photos (Validation)
-- Take ~100-200 real photos for validation set
-- Use existing datasets (tomwhite/set-game has labeled data)
-- Crowdsource from friends/family playing Set
+**Output:** YOLO-format annotations with bounding boxes
 
 ### Prior Art
 - [tomwhite/set-game](https://github.com/tomwhite/set-game) - CNN approach with real photos
@@ -82,38 +87,33 @@ Generate training images programmatically:
 
 ## V1 Milestones
 
-### M1: Card Asset Creation (Day 1-2)
-- [ ] Generate SVG/PNG for all 81 cards
-- [ ] Create card outline for detection training
-- [ ] Validate visual accuracy
-
-### M2: Synthetic Data Pipeline (Day 3-5)
-- [ ] Background image collection (textures, tables)
-- [ ] Data generation script
-- [ ] Generate 10k+ training images with labels
-- [ ] YOLO format annotations (bounding boxes)
-- [ ] Classification labels
-
-### M3: Detection Model (Day 6-8)
-- [ ] Train YOLOv8 for card detection
-- [ ] Handle rotated bounding boxes (OBB)
-- [ ] Evaluate on real photos
-- [ ] Iterate on data augmentation
-
-### M4: Classification Model (Day 9-11)
-- [ ] Train CNN classifier (ResNet18 or MobileNet)
+### M1: Classification Model (Day 1-3) ⭐ START HERE
+- [ ] Split existing data into train/val/test
+- [ ] Train CNN classifier (MobileNetV3 for iPhone compat)
 - [ ] Multi-head output: shape, color, number, fill
-- [ ] Evaluate accuracy per attribute
+- [ ] Target: >95% accuracy per attribute
+- [x] Set-finding algorithm (already implemented!)
 
-### M5: Solver + Visualization (Day 12-13)
-- [ ] Implement Set-finding algorithm (brute force: C(n,3) combinations)
-- [ ] Draw bounding boxes + labels on image
-- [ ] Highlight valid Sets with colors
+### M2: Synthetic Board Generation (Day 4-6)
+- [ ] Collect background images (tables, floors)
+- [ ] Write board composition script
+- [ ] Generate 5k+ board images with YOLO annotations
+- [ ] Include rotation, scale, perspective augmentation
 
-### M6: Integration + CLI (Day 14)
-- [ ] End-to-end pipeline: photo → solutions
-- [ ] CLI tool: `set-solver solve image.jpg`
-- [ ] Performance benchmarks
+### M3: Detection Model (Day 7-9)
+- [ ] Train YOLOv8n (nano) for card detection
+- [ ] Evaluate on held-out synthetic + real photos
+- [ ] Iterate on augmentation if needed
+
+### M4: Integration Pipeline (Day 10-11)
+- [ ] End-to-end: photo → detect → classify → solve
+- [ ] Visualization: draw boxes + highlight Sets
+- [ ] CLI tool: `python -m src.inference.solve photo.jpg`
+
+### M5: Real-World Testing (Day 12-14)
+- [ ] Test on real photos (take ~50 photos)
+- [ ] Fine-tune if needed
+- [ ] Performance benchmarks (speed, accuracy)
 
 ---
 
