@@ -22,6 +22,7 @@ from tqdm import tqdm
 # === Config ===
 
 DATA_DIR = Path(__file__).parent.parent.parent / "training_images"
+SYNTHETIC_DATA_DIR = Path(__file__).parent.parent.parent / "training_images_synthetic"
 WEIGHTS_DIR = Path(__file__).parent.parent.parent / "weights"
 WEIGHTS_DIR.mkdir(exist_ok=True)
 
@@ -42,29 +43,35 @@ FILL_NAMES = ["empty", "full", "partial"]
 
 class SetCardDataset(Dataset):
     """Dataset of labeled Set card images."""
-    
-    def __init__(self, data_dir: Path, transform=None):
-        self.data_dir = data_dir
+
+    def __init__(self, data_dirs, transform=None):
+        if isinstance(data_dirs, Path):
+            data_dirs = [data_dirs]
         self.transform = transform
         self.samples: List[Tuple[Path, Dict[str, int]]] = []
-        
+
         # Walk the directory structure to find all images
-        for number in NUMBER_MAP:
-            for color in COLOR_MAP:
-                for shape in SHAPE_MAP:
-                    for fill in FILL_MAP:
-                        folder = data_dir / number / color / shape / fill
-                        if folder.exists():
-                            for img_path in folder.glob("*.png"):
-                                labels = {
-                                    "number": NUMBER_MAP[number],
-                                    "color": COLOR_MAP[color],
-                                    "shape": SHAPE_MAP[shape],
-                                    "fill": FILL_MAP[fill],
-                                }
-                                self.samples.append((img_path, labels))
-        
-        print(f"Loaded {len(self.samples)} samples from {data_dir}")
+        for data_dir in data_dirs:
+            if not data_dir.exists():
+                continue
+            count_before = len(self.samples)
+            for number in NUMBER_MAP:
+                for color in COLOR_MAP:
+                    for shape in SHAPE_MAP:
+                        for fill in FILL_MAP:
+                            folder = data_dir / number / color / shape / fill
+                            if folder.exists():
+                                for img_path in folder.glob("*.png"):
+                                    labels = {
+                                        "number": NUMBER_MAP[number],
+                                        "color": COLOR_MAP[color],
+                                        "shape": SHAPE_MAP[shape],
+                                        "fill": FILL_MAP[fill],
+                                    }
+                                    self.samples.append((img_path, labels))
+            print(f"Loaded {len(self.samples) - count_before} samples from {data_dir}")
+
+        print(f"Total: {len(self.samples)} samples")
     
     def __len__(self):
         return len(self.samples)
@@ -157,10 +164,12 @@ def train_epoch(model, loader, optimizer, criterion, device):
         optimizer.zero_grad()
         outputs = model(images)
         
-        # Compute loss for each head
+        # Compute loss for each head (2x weight on fill to penalize fill mistakes)
         loss = 0
+        fill_weight = 2.0
         for i, key in enumerate(["number", "color", "shape", "fill"]):
-            loss += criterion(outputs[key], labels[:, i])
+            head_loss = criterion(outputs[key], labels[:, i])
+            loss += fill_weight * head_loss if key == "fill" else head_loss
             preds = outputs[key].argmax(dim=1)
             correct[key] += (preds == labels[:, i]).sum().item()
         
@@ -205,7 +214,7 @@ def evaluate(model, loader, criterion, device):
 def main():
     # === Hyperparameters ===
     BATCH_SIZE = 32
-    EPOCHS = 30
+    EPOCHS = 50
     LR = 1e-3
     VAL_SPLIT = 0.15
     TEST_SPLIT = 0.10
@@ -216,11 +225,14 @@ def main():
     
     # === Data transforms ===
     train_transform = transforms.Compose([
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
+        transforms.RandomResizedCrop(IMG_SIZE, scale=(0.7, 1.0)),  # Simulate imperfect detector crops
         transforms.RandomHorizontalFlip(),
         transforms.RandomVerticalFlip(),
         transforms.RandomRotation(180),  # Cards can be any orientation
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+        transforms.RandomPerspective(distortion_scale=0.15, p=0.5),  # Perspective warp from detection
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.05),
+        transforms.RandomGrayscale(p=0.05),  # Force model to not rely solely on color for fill
+        transforms.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0)),  # ~30% effective via random sigma
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
@@ -231,8 +243,11 @@ def main():
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
     
-    # === Load dataset ===
-    full_dataset = SetCardDataset(DATA_DIR, transform=None)  # No transform yet
+    # === Load dataset (clean + synthetic crops) ===
+    data_dirs = [DATA_DIR]
+    if SYNTHETIC_DATA_DIR.exists():
+        data_dirs.append(SYNTHETIC_DATA_DIR)
+    full_dataset = SetCardDataset(data_dirs, transform=None)  # No transform yet
     
     # Split into train/val/test
     total = len(full_dataset)

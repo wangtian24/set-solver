@@ -38,3 +38,4 @@ dist/
 # Generated showcases (large files)
 showcase*.html
 yolo11n.pt
+training_images_synthetic

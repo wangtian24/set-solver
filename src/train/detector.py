@@ -8,7 +8,7 @@ from pathlib import Path
 from ultralytics import YOLO
 
 
-DATA_DIR = Path(__file__).parent.parent.parent / "data" / "synthetic"
+DATA_DIR = Path.home() / "data" / "set-solver" / "synthetic"
 DEFAULT_WEIGHTS_DIR = Path.home() / "data" / "set-solver" / "weights"
 
 
@@ -19,6 +19,7 @@ def train_detector(
     model_size: str = "n",  # n=nano, s=small, m=medium
     device: str = "auto",  # auto, mps, cpu, cuda
     weights_dir: Path = None,
+    resume: bool = False,
 ):
     """Train YOLOv8 on synthetic board images."""
     
@@ -41,23 +42,34 @@ def train_detector(
     print(f"Using device: {device}")
     print(f"Saving weights to: {weights_dir}")
     
-    # Load pretrained YOLOv8
-    model = YOLO(f"yolo11{model_size}.pt")
-    
-    # Train
-    results = model.train(
-        data=DATA_DIR / "dataset.yaml",
-        epochs=epochs,
-        imgsz=imgsz,
-        batch=batch,
-        device=device,
-        project=str(weights_dir),
-        name="detector",
-        exist_ok=True,
-        patience=20,  # Early stopping
-        save=True,
-        plots=True,
-    )
+    # Resume from last checkpoint if available, otherwise start fresh
+    last_pt = weights_dir / "detector" / "weights" / "last.pt"
+    if resume and last_pt.exists():
+        print(f"Resuming from {last_pt}")
+        model = YOLO(str(last_pt))
+        results = model.train(resume=True)
+    else:
+        model = YOLO(f"yolo11{model_size}.pt")
+        results = model.train(
+            data=DATA_DIR / "dataset.yaml",
+            epochs=epochs,
+            imgsz=imgsz,
+            batch=batch,
+            device=device,
+            project=str(weights_dir),
+            name="detector",
+            exist_ok=True,
+            patience=20,       # Early stopping
+            save=True,
+            save_period=10,    # Save named checkpoint every 10 epochs
+            plots=True,
+            # Augmentation settings
+            degrees=15.0,      # Random rotation ±15°
+            perspective=0.001, # Small perspective augmentation
+            flipud=0.5,        # Vertical flip (cards can be upside down)
+            mosaic=0.0,        # Disabled — MPS crashes with many GT objects from mosaic
+            mixup=0.0,         # Disabled — same MPS issue
+        )
     
     print(f"\nTraining complete!")
     print(f"Best model: {weights_dir / 'detector' / 'weights' / 'best.pt'}")
@@ -78,8 +90,10 @@ def main():
                         help="Device (auto, mps, cpu, cuda)")
     parser.add_argument("--project", type=str, default=None,
                         help=f"Weights directory (default: {DEFAULT_WEIGHTS_DIR})")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume training from last checkpoint")
     args = parser.parse_args()
-    
+
     train_detector(
         epochs=args.epochs,
         batch=args.batch,
@@ -87,6 +101,7 @@ def main():
         model_size=args.model,
         device=args.device,
         weights_dir=args.project,
+        resume=args.resume,
     )
 
 

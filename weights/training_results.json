@@ -1,13 +1,13 @@
 {
-  "test_loss": 0.043535132493291585,
+  "test_loss": 0.009692762911799945,
   "test_accuracy": {
-    "number": 0.9948453608247423,
+    "number": 1.0,
     "color": 1.0,
-    "shape": 1.0,
-    "fill": 1.0
+    "shape": 0.9992082343626286,
+    "fill": 0.997624703087886
   },
-  "avg_test_accuracy": 0.9987113402061856,
-  "train_size": 1458,
-  "val_size": 291,
-  "test_size": 194
+  "avg_test_accuracy": 0.9992082343626286,
+  "train_size": 9479,
+  "val_size": 1895,
+  "test_size": 1263
 }

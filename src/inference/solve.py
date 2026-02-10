@@ -152,6 +152,65 @@ class SetSolver:
             bbox=bbox,
         )
     
+    def solve_from_image(
+        self,
+        image: Image.Image,
+        conf: float = 0.5,
+    ) -> dict:
+        """
+        Solve a Set game from a PIL Image directly.
+
+        Args:
+            image: PIL Image (RGB)
+            conf: Detection confidence threshold
+
+        Returns:
+            Dict with detected cards, found Sets, and annotated result image
+        """
+        image = image.convert("RGB")
+
+        detections = self.detect_cards(image, conf=conf)
+
+        cards = []
+        for det in detections:
+            x1, y1, x2, y2 = det["bbox"]
+            card_crop = image.crop((x1, y1, x2, y2))
+            attrs = self.classify_card(card_crop)
+            card = self.detection_to_card(attrs, det["bbox"])
+            cards.append({
+                "card": card,
+                "attrs": attrs,
+                "detection": det,
+            })
+
+        card_objects = [c["card"] for c in cards]
+        sets = find_all_sets(card_objects)
+
+        result_image = self._draw_results(image, cards, sets)
+
+        return {
+            "num_cards": len(cards),
+            "cards": [
+                {
+                    "attrs": c["attrs"],
+                    "chinese": card_to_chinese(c["attrs"]),
+                    "bbox": c["detection"]["bbox"],
+                    "confidence": c["detection"]["confidence"],
+                }
+                for c in cards
+            ],
+            "num_sets": len(sets),
+            "sets": [
+                [str(card) for card in s]
+                for s in sets
+            ],
+            "sets_chinese": [
+                [card_to_chinese(next(c["attrs"] for c in cards if c["card"] is card)) for card in s]
+                for s in sets
+            ],
+            "result_image": result_image,
+        }
+
     def solve(
         self,
         image_path: str,

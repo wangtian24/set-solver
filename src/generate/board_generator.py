@@ -21,7 +21,7 @@ import cv2
 CARD_DIR = Path(__file__).parent.parent.parent / "training_images"
 BACKGROUNDS_DIR = Path(__file__).parent.parent.parent / "data" / "backgrounds"
 NOISE_OBJECTS_DIR = Path(__file__).parent.parent.parent / "data" / "noise_objects"
-OUTPUT_DIR = Path(__file__).parent.parent.parent / "data" / "synthetic"
+OUTPUT_DIR = Path.home() / "data" / "set-solver" / "synthetic"
 
 
 def get_noise_objects() -> List[Image.Image]:
@@ -122,6 +122,102 @@ def get_all_card_paths() -> List[Tuple[Path, dict]]:
     return cards
 
 
+def _smooth_noise(width: int, height: int, scale: int = 8) -> np.ndarray:
+    """Generate cheap Perlin-like noise via upscaled random arrays.
+
+    Returns float32 array in [0, 1] of shape (height, width).
+    """
+    small_h = max(2, height // scale)
+    small_w = max(2, width // scale)
+    small = np.random.rand(small_h, small_w).astype(np.float32)
+    big = cv2.resize(small, (width, height), interpolation=cv2.INTER_CUBIC)
+    return np.clip(big, 0.0, 1.0)
+
+
+def _create_wood_background(width: int, height: int) -> Image.Image:
+    """Procedural wood texture with grain lines and smooth noise."""
+    # Brown / tan palette
+    base_r = random.randint(120, 180)
+    base_g = random.randint(70, 120)
+    base_b = random.randint(30, 70)
+    base = np.full((height, width, 3), [base_r, base_g, base_b], dtype=np.float32)
+
+    # Sine-wave grain lines (horizontal)
+    freq = random.uniform(0.02, 0.06)
+    phase = random.uniform(0, 2 * math.pi)
+    y_coords = np.arange(height).reshape(-1, 1).astype(np.float32)
+    grain = np.sin(y_coords * freq + phase) * 15  # amplitude +-15
+    base += grain[:, :, np.newaxis]
+
+    # Multi-octave smooth noise for wood-knot variation
+    for octave_scale in (32, 16, 8):
+        noise = _smooth_noise(width, height, scale=octave_scale)
+        base += (noise[:, :, np.newaxis] - 0.5) * 25
+
+    pixels = np.clip(base, 0, 255).astype(np.uint8)
+    return Image.fromarray(pixels)
+
+
+def _create_metal_background(width: int, height: int) -> Image.Image:
+    """Procedural brushed-metal texture."""
+    # Metallic gray palette
+    base_v = random.randint(140, 200)
+    base = np.full((height, width, 3), base_v, dtype=np.float32)
+
+    # Horizontal brush streaks
+    for _ in range(random.randint(60, 150)):
+        y = random.randint(0, height - 1)
+        thickness = random.randint(1, 3)
+        intensity = random.uniform(-12, 12)
+        y_end = min(height, y + thickness)
+        base[y:y_end, :, :] += intensity
+
+    # Smooth noise for subtle variation
+    noise = _smooth_noise(width, height, scale=16)
+    base += (noise[:, :, np.newaxis] - 0.5) * 20
+
+    # Optional specular highlight (50% chance)
+    if random.random() < 0.5:
+        cx = random.uniform(0.2, 0.8) * width
+        cy = random.uniform(0.2, 0.8) * height
+        yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+        dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+        highlight = np.exp(-dist / (max(width, height) * 0.4)) * 30
+        base += highlight[:, :, np.newaxis]
+
+    pixels = np.clip(base, 0, 255).astype(np.uint8)
+    return Image.fromarray(pixels)
+
+
+def _create_glass_background(width: int, height: int) -> Image.Image:
+    """Procedural glass/smooth surface texture."""
+    # Pick two nearby colours for a gradient
+    c1 = np.array([random.randint(180, 240)] * 3, dtype=np.float32)
+    c2 = c1 + np.array([random.randint(-30, 30) for _ in range(3)], dtype=np.float32)
+    c2 = np.clip(c2, 0, 255)
+
+    # Vertical gradient
+    t = np.linspace(0, 1, height, dtype=np.float32).reshape(-1, 1, 1)
+    grad = c1 * (1 - t) + c2 * t
+    base = np.broadcast_to(grad, (height, width, 3)).copy()
+
+    # Reflection bands
+    num_bands = random.randint(2, 5)
+    for _ in range(num_bands):
+        y_center = random.randint(0, height - 1)
+        band_w = random.randint(height // 20, height // 6)
+        yy = np.arange(height, dtype=np.float32)
+        band = np.exp(-((yy - y_center) ** 2) / (2 * (band_w ** 2))) * random.uniform(10, 25)
+        base += band.reshape(-1, 1, 1)
+
+    # Minimal noise
+    noise = _smooth_noise(width, height, scale=32)
+    base += (noise[:, :, np.newaxis] - 0.5) * 8
+
+    pixels = np.clip(base, 0, 255).astype(np.uint8)
+    return Image.fromarray(pixels)
+
+
 def create_solid_background(width: int, height: int) -> Image.Image:
     """Create a solid color background (table-like colors)."""
     colors = [
@@ -153,9 +249,17 @@ def load_background(width: int, height: int) -> Image.Image:
             # Resize/crop to target size
             bg = bg.resize((width, height), Image.Resampling.LANCZOS)
             return bg
-    
-    # Fall back to solid color
-    return create_solid_background(width, height)
+
+    # Procedural texture selection (weighted)
+    r = random.random()
+    if r < 0.35:
+        return _create_wood_background(width, height)
+    elif r < 0.55:
+        return _create_metal_background(width, height)
+    elif r < 0.75:
+        return _create_glass_background(width, height)
+    else:
+        return create_solid_background(width, height)
 
 
 def rotate_and_get_bbox(
@@ -177,6 +281,26 @@ def rotate_and_get_bbox(
     rotated = card.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
     
     return rotated
+
+
+def resize_card(card: Image.Image, target_w: int, target_h: int, is_striped: bool = False) -> Image.Image:
+    """Resize card image, using gentler resampling for striped cards to avoid moire."""
+    if is_striped:
+        # Pre-blur to suppress high-frequency stripe ringing, then use BILINEAR
+        card = card.filter(ImageFilter.GaussianBlur(radius=0.6))
+        return card.resize((target_w, target_h), Image.Resampling.BILINEAR)
+    return card.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+
+def apply_card_rotation(card: Image.Image) -> Image.Image:
+    """Rotate an RGBA card image by a random angle.
+
+    Cards can be placed at any orientation on the table — some horizontal,
+    some vertical, some diagonal.  Shear/perspective effects come from the
+    whole-board perspective transform which simulates the camera angle.
+    """
+    angle = random.uniform(-180, 180)
+    return card.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
 
 
 def check_overlap(
@@ -201,6 +325,67 @@ def check_overlap(
     return False
 
 
+def _place_card(
+    board: Image.Image,
+    rotated: Image.Image,
+    x: int,
+    y: int,
+    board_w: int,
+    board_h: int,
+    label: dict,
+    annotations: List[dict],
+    placed_boxes: List[Tuple[int, int, int, int]],
+    min_visible: int = 20,
+) -> bool:
+    """Paste a card onto the board with edge-clipping support.
+
+    Handles cards that extend beyond image boundaries by pasting only the
+    visible portion and clipping the annotation bbox to image bounds.
+
+    Returns True if the card was placed (visible area large enough).
+    """
+    cw, ch = rotated.size
+
+    # Visible region in source-image coordinates
+    src_x1 = max(0, -x)
+    src_y1 = max(0, -y)
+    src_x2 = min(cw, board_w - x)
+    src_y2 = min(ch, board_h - y)
+
+    visible_w = src_x2 - src_x1
+    visible_h = src_y2 - src_y1
+    if visible_w < min_visible or visible_h < min_visible:
+        return False
+
+    # Paste — crop source when it goes off-edge
+    if src_x1 > 0 or src_y1 > 0 or src_x2 < cw or src_y2 < ch:
+        visible = rotated.crop((src_x1, src_y1, src_x2, src_y2))
+        board.paste(visible, (max(0, x), max(0, y)), visible)
+    else:
+        board.paste(rotated, (x, y), rotated)
+
+    placed_boxes.append((x, y, x + cw, y + ch))
+
+    # Annotation clipped to image bounds
+    ax1 = max(0, x)
+    ay1 = max(0, y)
+    ax2 = min(board_w, x + cw)
+    ay2 = min(board_h, y + ch)
+    ann_w = ax2 - ax1
+    ann_h = ay2 - ay1
+
+    annotations.append({
+        "class_id": 0,
+        "card_class_id": label["class_id"],
+        "x_center": (ax1 + ann_w / 2) / board_w,
+        "y_center": (ay1 + ann_h / 2) / board_h,
+        "width": ann_w / board_w,
+        "height": ann_h / board_h,
+        "label": label,
+    })
+    return True
+
+
 def apply_perspective_transform(
     image: Image.Image,
     annotations: List[dict],
@@ -208,45 +393,80 @@ def apply_perspective_transform(
 ) -> Tuple[Image.Image, List[dict]]:
     """
     Apply random perspective transform to simulate tilted camera angle.
-    
+
+    Picks a random viewing direction (top/bottom/left/right) and creates a
+    trapezoid warp where the "far" edge shrinks inward, like a real camera
+    looking at a table from that side.
+
     Args:
         image: PIL Image
         annotations: List of annotations with x_center, y_center, width, height (normalized)
-        strength: How strong the perspective effect is (0-0.3 recommended)
-    
+        strength: How strong the perspective effect is (0.1-0.35 recommended)
+
     Returns:
         Transformed image and updated annotations
     """
     width, height = image.size
-    
+
     # Convert to numpy for OpenCV
     img_array = np.array(image)
-    
-    # Define source points (corners of original image)
+
+    # Source corners: TL, TR, BR, BL
     src_pts = np.float32([
         [0, 0],
         [width, 0],
         [width, height],
         [0, height]
     ])
-    
-    # Randomly perturb destination points to create perspective effect
-    # This simulates viewing the table from different angles
-    max_shift = int(min(width, height) * strength)
-    
-    # Random shifts for each corner (but keep it realistic - like camera tilt)
-    # Top corners shift more than bottom (camera looking down at table)
-    top_shift_x = random.randint(-max_shift, max_shift)
-    top_shift_y = random.randint(0, max_shift)  # Only shift down/neutral
-    bottom_shift_x = random.randint(-max_shift // 2, max_shift // 2)
-    bottom_shift_y = random.randint(-max_shift // 2, 0)  # Only shift up/neutral
-    
-    dst_pts = np.float32([
-        [top_shift_x, top_shift_y],  # top-left
-        [width - top_shift_x, top_shift_y + random.randint(-max_shift//3, max_shift//3)],  # top-right
-        [width - bottom_shift_x, height + bottom_shift_y],  # bottom-right
-        [bottom_shift_x, height + bottom_shift_y + random.randint(-max_shift//3, max_shift//3)]  # bottom-left
-    ])
+
+    # Pick a random direction the camera is looking FROM.
+    # The "far" edge (opposite side) shrinks inward to create a trapezoid.
+    inset = int(min(width, height) * strength)
+    direction = random.choice(["top", "bottom", "left", "right"])
+
+    # Small random asymmetry so left/right insets aren't perfectly equal
+    asym = random.uniform(0.7, 1.3)
+
+    if direction == "bottom":
+        # Camera looking from below — top edge (far) narrows
+        inset_l = int(inset * asym)
+        inset_r = int(inset / asym)
+        dst_pts = np.float32([
+            [inset_l, inset],          # TL moves right & down
+            [width - inset_r, inset],   # TR moves left & down
+            [width, height],             # BR stays
+            [0, height]                  # BL stays
+        ])
+    elif direction == "top":
+        # Camera looking from above — bottom edge (far) narrows
+        inset_l = int(inset * asym)
+        inset_r = int(inset / asym)
+        dst_pts = np.float32([
+            [0, 0],                          # TL stays
+            [width, 0],                      # TR stays
+            [width - inset_r, height - inset],  # BR moves left & up
+            [inset_l, height - inset]           # BL moves right & up
+        ])
+    elif direction == "left":
+        # Camera looking from the left — right edge (far) narrows
+        inset_t = int(inset * asym)
+        inset_b = int(inset / asym)
+        dst_pts = np.float32([
+            [0, 0],                          # TL stays
+            [width - inset, inset_t],        # TR moves left & down
+            [width - inset, height - inset_b],  # BR moves left & up
+            [0, height]                      # BL stays
+        ])
+    else:  # right
+        # Camera looking from the right — left edge (far) narrows
+        inset_t = int(inset * asym)
+        inset_b = int(inset / asym)
+        dst_pts = np.float32([
+            [inset, inset_t],                # TL moves right & down
+            [width, 0],                      # TR stays
+            [width, height],                 # BR stays
+            [inset, height - inset_b]        # BL moves right & up
+        ])
     
     # Compute perspective transform matrix
     M = cv2.getPerspectiveTransform(src_pts, dst_pts)
@@ -311,14 +531,15 @@ def generate_board(
     width: int = 1280,
     height: int = 960,
     max_attempts: int = 100,
-    layout: str = "grid",  # "grid" or "random"
+    layout: str = "grid",  # "grid", "random", "overlap", or "pile"
 ) -> Tuple[Image.Image, List[dict]]:
     """
     Generate a synthetic board image with cards.
-    
+
     Args:
-        layout: "grid" for realistic Set layout, "random" for scattered
-    
+        layout: "grid" (realistic Set layout), "random" (scattered, no overlap),
+                "overlap" (deliberate 10-40% overlap), "pile" (messy, heavy overlap)
+
     Returns:
         - Board image
         - List of annotations (bbox + class_id for each card)
@@ -343,11 +564,11 @@ def generate_board(
         elif num_cards <= 12:
             rows, cols = 3, 4
         else:
-            rows, cols = 4, 4
-        
-        # Calculate card size to fill ~80% of the board
-        padding = 30  # Edge padding
-        card_gap = 15  # Gap between cards
+            rows, cols = 3, 5
+
+        # Calculate card size to fill most of the board
+        padding = 15  # Edge padding
+        card_gap = 8   # Gap between cards
         
         available_width = width - 2 * padding - (cols - 1) * card_gap
         available_height = height - 2 * padding - (rows - 1) * card_gap
@@ -361,10 +582,10 @@ def generate_board(
         
         # Calculate card size maintaining aspect ratio
         if cell_width / cell_height > card_aspect:
-            card_h = int(cell_height * 0.9)  # 90% of cell
+            card_h = int(cell_height * 0.95)  # 95% of cell
             card_w = int(card_h * card_aspect)
         else:
-            card_w = int(cell_width * 0.9)
+            card_w = int(cell_width * 0.95)
             card_h = int(card_w / card_aspect)
         
         # Place cards in grid with slight randomness
@@ -379,11 +600,11 @@ def generate_board(
                 
                 # Load and resize card
                 card = Image.open(card_path).convert("RGBA")
-                card = card.resize((card_w, card_h), Image.Resampling.LANCZOS)
-                
-                # Add slight rotation (-10 to +10 degrees)
-                angle = random.uniform(-10, 10)
-                rotated = card.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
+                is_striped = label["fill"] == 2  # partial/striped
+                card = resize_card(card, card_w, card_h, is_striped=is_striped)
+
+                # Per-card rotation only (shear/perspective applied to whole board)
+                rotated = apply_card_rotation(card)
                 cw, ch = rotated.size
                 
                 # Calculate grid position with randomness
@@ -417,49 +638,106 @@ def generate_board(
                 })
                 # Track placed boxes for noise object placement
                 placed_boxes.append((x, y, x + cw, y + ch))
-    else:
-        # Random layout (original behavior but with larger cards)
+    elif layout == "random":
+        # Random layout — scattered cards, no overlap, uniform size
+        sample_card = Image.open(selected[0][0])
+        card_aspect = sample_card.width / sample_card.height
+        card_h = int(min(width, height) * 0.22)
+        card_w = int(card_h * card_aspect)
+
         for card_path, label in selected:
             card = Image.open(card_path).convert("RGBA")
-            
-            # Larger scale for random layout (fill more space)
-            angle = random.uniform(-20, 20)
-            scale = random.uniform(1.2, 1.8)
-            
-            rotated = rotate_and_get_bbox(card, angle, scale)
+            is_striped = label["fill"] == 2
+            card = resize_card(card, card_w, card_h, is_striped=is_striped)
+
+            rotated = apply_card_rotation(card)
             cw, ch = rotated.size
-            
-            placed = False
+
             for _ in range(max_attempts):
                 pad = 20
-                x = random.randint(pad, width - cw - pad) if width > cw + 2*pad else pad
-                y = random.randint(pad, height - ch - pad) if height > ch + 2*pad else pad
-                
+                x = random.randint(pad, width - cw - pad) if width > cw + 2 * pad else pad
+                y = random.randint(pad, height - ch - pad) if height > ch + 2 * pad else pad
+
                 bbox = (x, y, x + cw, y + ch)
-                
+
                 if not check_overlap(bbox, placed_boxes, margin=20):
-                    board.paste(rotated, (x, y), rotated)
-                    placed_boxes.append(bbox)
-                    
-                    x_center = (x + cw / 2) / width
-                    y_center = (y + ch / 2) / height
-                    box_w = cw / width
-                    box_h = ch / height
-                    
-                    annotations.append({
-                        "class_id": 0,
-                        "card_class_id": label["class_id"],
-                        "x_center": x_center,
-                        "y_center": y_center,
-                        "width": box_w,
-                        "height": box_h,
-                        "label": label,
-                    })
-                    placed = True
+                    _place_card(board, rotated, x, y, width, height,
+                                label, annotations, placed_boxes)
                     break
-            
-            if not placed:
-                continue
+
+    elif layout == "overlap":
+        # Cards with deliberate 10-40% overlap — simulates crowded table
+        sample_card = Image.open(selected[0][0])
+        card_aspect = sample_card.width / sample_card.height
+        card_h = int(min(width, height) * 0.22)
+        card_w = int(card_h * card_aspect)
+
+        for idx, (card_path, label) in enumerate(selected):
+            card = Image.open(card_path).convert("RGBA")
+            is_striped = label["fill"] == 2
+            card = resize_card(card, card_w, card_h, is_striped=is_striped)
+
+            rotated = apply_card_rotation(card)
+            cw, ch = rotated.size
+
+            if idx == 0 or not placed_boxes:
+                # First card: place in central area
+                x = random.randint(width // 6, max(width // 6 + 1, width - cw - width // 6))
+                y = random.randint(height // 6, max(height // 6 + 1, height - ch - height // 6))
+            else:
+                # Pick a random existing card to overlap with
+                target_box = random.choice(placed_boxes)
+                tx1, ty1, tx2, ty2 = target_box
+                tw, th = tx2 - tx1, ty2 - ty1
+
+                overlap_frac = random.uniform(0.1, 0.4)
+                side = random.choice(["left", "right", "top", "bottom"])
+                if side == "right":
+                    x = tx2 - int(cw * overlap_frac)
+                    y = ty1 + random.randint(-ch // 3, max(1, th - ch // 3))
+                elif side == "left":
+                    x = tx1 - cw + int(cw * overlap_frac)
+                    y = ty1 + random.randint(-ch // 3, max(1, th - ch // 3))
+                elif side == "bottom":
+                    x = tx1 + random.randint(-cw // 3, max(1, tw - cw // 3))
+                    y = ty2 - int(ch * overlap_frac)
+                else:  # top
+                    x = tx1 + random.randint(-cw // 3, max(1, tw - cw // 3))
+                    y = ty1 - ch + int(ch * overlap_frac)
+
+                # Allow slight edge clipping
+                x = max(-cw // 5, min(width - cw * 4 // 5, x))
+                y = max(-ch // 5, min(height - ch * 4 // 5, y))
+
+            _place_card(board, rotated, x, y, width, height,
+                        label, annotations, placed_boxes)
+
+    elif layout == "pile":
+        # Messy scattered layout — no overlap avoidance, variable card sizes
+        sample_card = Image.open(selected[0][0])
+        card_aspect = sample_card.width / sample_card.height
+        base_card_h = int(min(width, height) * 0.22)
+
+        for card_path, label in selected:
+            # Variable card size ±15%
+            scale_var = random.uniform(0.85, 1.15)
+            card_h = int(base_card_h * scale_var)
+            card_w = int(card_h * card_aspect)
+
+            card = Image.open(card_path).convert("RGBA")
+            is_striped = label["fill"] == 2
+            card = resize_card(card, card_w, card_h, is_striped=is_striped)
+
+            rotated = apply_card_rotation(card)
+            cw, ch = rotated.size
+
+            # Random position — allow partial off-edge
+            margin = cw // 5
+            x = random.randint(-margin, width - cw + margin)
+            y = random.randint(-margin, height - ch + margin)
+
+            _place_card(board, rotated, x, y, width, height,
+                        label, annotations, placed_boxes)
     
     # Add noise objects (50% chance, 1-4 objects)
     if random.random() < 0.5:
@@ -478,10 +756,10 @@ def generate_board(
         enhancer = ImageEnhance.Contrast(board)
         board = enhancer.enhance(random.uniform(0.8, 1.2))
     
-    # Apply perspective transform (仿射变换) to simulate camera angle
-    # Apply to ~70% of images for variety
-    if random.random() < 0.7:
-        strength = random.uniform(0.05, 0.15)  # Subtle to moderate perspective
+    # Apply perspective transform (透视变换) to simulate camera angle
+    # Apply to ~80% of images; remaining 20% stay top-down for variety
+    if random.random() < 0.8:
+        strength = random.uniform(0.10, 0.30)  # Noticeable camera tilt
         board, annotations = apply_perspective_transform(board, annotations, strength)
     
     return board, annotations
@@ -498,32 +776,48 @@ def save_yolo_annotation(annotations: List[dict], output_path: Path):
 
 def generate_dataset(
     num_images: int = 5000,
-    num_cards_range: Tuple[int, int] = (9, 12),
+    num_cards_range: Tuple[int, int] = (3, 18),
     output_dir: Path = OUTPUT_DIR,
     width: int = 1280,
     height: int = 960,
-    layout: str = "grid",  # "grid" or "random"
+    layout: str = "mixed",
+    val_fraction: float = 0.2,
 ):
-    """Generate a full synthetic dataset."""
+    """Generate a full synthetic dataset with proper train/val split."""
     output_dir = Path(output_dir)
-    images_dir = output_dir / "images"
-    labels_dir = output_dir / "labels"
-    
-    images_dir.mkdir(parents=True, exist_ok=True)
-    labels_dir.mkdir(parents=True, exist_ok=True)
-    
+
+    # Create train/val directory structure
+    for split in ("train", "val"):
+        (output_dir / "images" / split).mkdir(parents=True, exist_ok=True)
+        (output_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
+
     # Load all card paths
     card_paths = get_all_card_paths()
     print(f"Loaded {len(card_paths)} card images")
     print(f"Layout: {layout}, Cards per board: {num_cards_range[0]}-{num_cards_range[1]}")
-    
+
+    num_val = int(num_images * val_fraction)
+    num_train = num_images - num_val
+    print(f"Split: {num_train} train, {num_val} val")
+
     # Generate images
     for i in tqdm(range(num_images), desc="Generating boards"):
         num_cards = random.randint(*num_cards_range)
-        
-        # Mix layouts: 80% grid, 20% random for variety
-        use_layout = layout if layout != "mixed" else ("grid" if random.random() < 0.8 else "random")
-        
+
+        # Determine layout: 35% grid, 25% random, 25% overlap, 15% pile
+        if layout == "mixed":
+            r = random.random()
+            if r < 0.35:
+                use_layout = "grid"
+            elif r < 0.60:
+                use_layout = "random"
+            elif r < 0.85:
+                use_layout = "overlap"
+            else:
+                use_layout = "pile"
+        else:
+            use_layout = layout
+
         board, annotations = generate_board(
             card_paths,
             num_cards=num_cards,
@@ -531,33 +825,35 @@ def generate_dataset(
             height=height,
             layout=use_layout,
         )
-        
+
+        # Deterministic split: first num_train → train, rest → val
+        split = "train" if i < num_train else "val"
+
         # Save image
-        img_path = images_dir / f"board_{i:05d}.jpg"
-        board.save(img_path, quality=90)
-        
+        img_path = output_dir / "images" / split / f"board_{i:05d}.png"
+        board.save(img_path)
+
         # Save YOLO annotation
-        ann_path = labels_dir / f"board_{i:05d}.txt"
+        ann_path = output_dir / "labels" / split / f"board_{i:05d}.txt"
         save_yolo_annotation(annotations, ann_path)
-        
+
         # Save detailed annotation (for classifier training later)
-        json_path = labels_dir / f"board_{i:05d}.json"
+        json_path = output_dir / "labels" / split / f"board_{i:05d}.json"
         with open(json_path, "w") as f:
             json.dump(annotations, f)
-    
+
     # Create dataset YAML for YOLO training
-    yaml_content = f"""
-path: {output_dir.absolute()}
-train: images
-val: images
+    yaml_content = f"""path: {output_dir.absolute()}
+train: images/train
+val: images/val
 
 names:
   0: card
 """
     with open(output_dir / "dataset.yaml", "w") as f:
         f.write(yaml_content)
-    
-    print(f"\nGenerated {num_images} images in {output_dir}")
+
+    print(f"\nGenerated {num_images} images ({num_train} train, {num_val} val)")
     print(f"Dataset YAML: {output_dir / 'dataset.yaml'}")
 
 
@@ -566,20 +862,24 @@ def main():
     
     parser = argparse.ArgumentParser(description="Generate synthetic board images")
     parser.add_argument("--num", type=int, default=5000, help="Number of images to generate")
-    parser.add_argument("--min-cards", type=int, default=9, help="Min cards per board")
-    parser.add_argument("--max-cards", type=int, default=12, help="Max cards per board")
+    parser.add_argument("--min-cards", type=int, default=3, help="Min cards per board")
+    parser.add_argument("--max-cards", type=int, default=18, help="Max cards per board")
     parser.add_argument("--width", type=int, default=1280, help="Image width")
     parser.add_argument("--height", type=int, default=960, help="Image height")
-    parser.add_argument("--layout", type=str, default="mixed", choices=["grid", "random", "mixed"],
-                        help="Layout style: grid (realistic), random (scattered), mixed (80/20)")
+    parser.add_argument("--layout", type=str, default="mixed",
+                        choices=["grid", "random", "overlap", "pile", "mixed"],
+                        help="Layout style")
+    parser.add_argument("--val-fraction", type=float, default=0.2,
+                        help="Fraction of images for validation (default: 0.2)")
     args = parser.parse_args()
-    
+
     generate_dataset(
         num_images=args.num,
         num_cards_range=(args.min_cards, args.max_cards),
         width=args.width,
         height=args.height,
         layout=args.layout,
+        val_fraction=args.val_fraction,
     )
 
 
