@@ -10,10 +10,13 @@ venv/
 data/synthetic/
 data/real/
 data/backgrounds/
+data/noise_objects/
 training_images/
 weights/*.pt
 weights/*.onnx
 weights/*.mlmodel
+weights/*.log
+weights/detector/
 
 # IDE
 .idea/
@@ -31,3 +34,6 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
+
+# Generated showcases (large files)
+showcase*.html

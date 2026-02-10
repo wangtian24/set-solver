@@ -17,8 +17,21 @@ def train_detector(
     imgsz: int = 640,
     batch: int = 16,
     model_size: str = "n",  # n=nano, s=small, m=medium
+    device: str = "auto",  # auto, mps, cpu, cuda
 ):
     """Train YOLOv8 on synthetic board images."""
+    
+    # Auto-detect best device
+    if device == "auto":
+        import torch
+        if torch.backends.mps.is_available():
+            device = "mps"
+        elif torch.cuda.is_available():
+            device = "cuda"
+        else:
+            device = "cpu"
+    
+    print(f"Using device: {device}")
     
     # Load pretrained YOLOv8
     model = YOLO(f"yolo11{model_size}.pt")
@@ -29,6 +42,7 @@ def train_detector(
         epochs=epochs,
         imgsz=imgsz,
         batch=batch,
+        device=device,
         project=str(WEIGHTS_DIR),
         name="detector",
         exist_ok=True,
