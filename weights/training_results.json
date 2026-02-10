@@ -1,0 +1,13 @@
+{
+  "test_loss": 0.005791187885084322,
+  "test_accuracy": {
+    "number": 1.0,
+    "color": 1.0,
+    "shape": 1.0,
+    "fill": 1.0
+  },
+  "avg_test_accuracy": 1.0,
+  "train_size": 1458,
+  "val_size": 291,
+  "test_size": 194
+}

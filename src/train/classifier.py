@@ -87,6 +87,18 @@ class SetCardDataset(Dataset):
         ], dtype=torch.long)
         
         return image, label_tensor
+    
+    def get_raw(self, idx):
+        """Get raw PIL image and labels (no transform)."""
+        img_path, labels = self.samples[idx]
+        image = Image.open(img_path).convert("RGB")
+        label_tensor = torch.tensor([
+            labels["number"],
+            labels["color"],
+            labels["shape"],
+            labels["fill"],
+        ], dtype=torch.long)
+        return image, label_tensor
 
 
 # === Model ===
@@ -220,7 +232,7 @@ def main():
     ])
     
     # === Load dataset ===
-    full_dataset = SetCardDataset(DATA_DIR, transform=train_transform)
+    full_dataset = SetCardDataset(DATA_DIR, transform=None)  # No transform yet
     
     # Split into train/val/test
     total = len(full_dataset)
@@ -233,14 +245,32 @@ def main():
         generator=torch.Generator().manual_seed(42)
     )
     
-    # Update transforms for val/test (no augmentation)
-    val_dataset.dataset.transform = val_transform
-    
     print(f"Train: {len(train_dataset)}, Val: {len(val_dataset)}, Test: {len(test_dataset)}")
     
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+    # Wrap with transform (can't change transform on Subset, so we wrap)
+    class TransformDataset(torch.utils.data.Dataset):
+        def __init__(self, subset, transform):
+            self.subset = subset
+            self.transform = transform
+        def __len__(self):
+            return len(self.subset)
+        def __getitem__(self, idx):
+            image, label = self.subset[idx]
+            if self.transform:
+                image = self.transform(image)
+            return image, label
+    
+    train_dataset = TransformDataset(train_dataset, train_transform)
+    val_dataset = TransformDataset(val_dataset, val_transform)
+    test_dataset = TransformDataset(test_dataset, val_transform)
+    
+    # Use num_workers=0 on macOS to avoid shared memory issues
+    import platform
+    num_workers = 0 if platform.system() == "Darwin" else 4
+    
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=num_workers)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=num_workers)
     
     # === Model ===
     model = SetCardClassifier(pretrained=True).to(device)
