@@ -24,6 +24,22 @@ from src.solver.set_finder import Card, Shape, Color, Number, Fill, find_all_set
 
 
 WEIGHTS_DIR = Path(__file__).parent.parent.parent / "weights"
+DATA_WEIGHTS_DIR = Path.home() / "data" / "set-solver" / "weights"
+
+# Chinese shorthand names: {1,2,3}-{实，空，线}-{红，绿，紫}-{菱，圆，弯}
+CHINESE_NUMBER = {"one": "1", "two": "2", "three": "3"}
+CHINESE_FILL = {"full": "实", "empty": "空", "partial": "线"}
+CHINESE_COLOR = {"red": "红", "green": "绿", "blue": "紫"}
+CHINESE_SHAPE = {"diamond": "菱", "oval": "圆", "squiggle": "弯"}
+
+
+def card_to_chinese(attrs: dict) -> str:
+    """Convert card attributes to Chinese shorthand like '2实红菱'."""
+    num = CHINESE_NUMBER.get(attrs['number'], attrs['number'])
+    fill = CHINESE_FILL.get(attrs['fill'], attrs['fill'])
+    color = CHINESE_COLOR.get(attrs['color'], attrs['color'])
+    shape = CHINESE_SHAPE.get(attrs['shape'], attrs['shape'])
+    return f"{num}{fill}{color}{shape}"
 
 # Colors for highlighting Sets (RGB)
 SET_COLORS = [
@@ -53,7 +69,10 @@ class SetSolver:
         
         # Load detector
         if detector_path is None:
-            detector_path = WEIGHTS_DIR / "detector" / "weights" / "best.pt"
+            # Check ~/data first, then repo weights
+            data_path = DATA_WEIGHTS_DIR / "detector" / "weights" / "best.pt"
+            repo_path = WEIGHTS_DIR / "detector" / "weights" / "best.pt"
+            detector_path = data_path if data_path.exists() else repo_path
         print(f"Loading detector from {detector_path}")
         self.detector = YOLO(str(detector_path))
         
@@ -196,6 +215,7 @@ class SetSolver:
             "cards": [
                 {
                     "attrs": c["attrs"],
+                    "chinese": card_to_chinese(c["attrs"]),
                     "bbox": c["detection"]["bbox"],
                     "confidence": c["detection"]["confidence"],
                 }
@@ -204,6 +224,10 @@ class SetSolver:
             "num_sets": len(sets),
             "sets": [
                 [str(card) for card in s]
+                for s in sets
+            ],
+            "sets_chinese": [
+                [card_to_chinese(next(c["attrs"] for c in cards if c["card"] is card)) for card in s]
                 for s in sets
             ],
             "result_image": result_image,
@@ -219,10 +243,21 @@ class SetSolver:
         result = image.copy()
         draw = ImageDraw.Draw(result)
         
-        # Try to load a font, fall back to default
-        try:
-            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 16)
-        except:
+        # Try to load a Chinese-compatible font
+        font = None
+        font_paths = [
+            "/System/Library/Fonts/PingFang.ttc",  # macOS
+            "/System/Library/Fonts/STHeiti Light.ttc",  # macOS
+            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",  # Linux
+            "C:\\Windows\\Fonts\\msyh.ttc",  # Windows
+        ]
+        for font_path in font_paths:
+            try:
+                font = ImageFont.truetype(font_path, 18)
+                break
+            except:
+                continue
+        if font is None:
             font = ImageFont.load_default()
         
         # Map cards to Set colors (a card can be in multiple Sets)
@@ -240,21 +275,27 @@ class SetSolver:
             attrs = c["attrs"]
             x1, y1, x2, y2 = card.bbox
             
-            # Determine box color
+            # Determine box color(s)
             if id(card) in card_colors:
                 colors = card_colors[id(card)]
-                color = colors[0]  # Primary color
                 width = 4
+                # Draw offset boxes for each set the card belongs to
+                for i, color in enumerate(colors):
+                    offset = i * 5  # Offset each box by 5 pixels
+                    draw.rectangle(
+                        [x1 - offset, y1 - offset, x2 + offset, y2 + offset], 
+                        outline=color, 
+                        width=width
+                    )
+                color = colors[0]  # Use first color for label
             else:
                 color = (200, 200, 200)  # Gray for non-Set cards
                 width = 2
+                draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
             
-            # Draw box
-            draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
-            
-            # Draw label
-            label = f"{attrs['number'][0]}{attrs['color'][0]}{attrs['shape'][0]}{attrs['fill'][0]}"
-            draw.text((x1, y1 - 18), label, fill=color, font=font)
+            # Draw label (Chinese shorthand)
+            label = card_to_chinese(attrs)
+            draw.text((x1, y1 - 20), label, fill=color, font=font)
         
         # Draw Set count
         draw.text((10, 10), f"Found {len(sets)} Set(s)", fill=(255, 255, 255), font=font)
@@ -268,7 +309,7 @@ def main():
     parser = argparse.ArgumentParser(description="Solve Set game from image")
     parser.add_argument("image", type=str, help="Path to input image")
     parser.add_argument("--output", "-o", type=str, help="Path to save output image")
-    parser.add_argument("--conf", type=float, default=0.5, help="Detection confidence")
+    parser.add_argument("--conf", type=float, default=0.25, help="Detection confidence")
     parser.add_argument("--show", action="store_true", help="Display result")
     args = parser.parse_args()
     
@@ -281,17 +322,20 @@ def main():
     )
     
     print("\n" + "="*50)
-    print("RESULTS")
+    print("结果 RESULTS")
     print("="*50)
-    print(f"Cards detected: {result['num_cards']}")
-    print(f"Sets found: {result['num_sets']}")
+    print(f"检测到卡牌: {result['num_cards']}")
+    print(f"找到Set: {result['num_sets']}")
     
-    if result['sets']:
+    if result['cards']:
+        print("\n卡牌:")
+        for c in result['cards']:
+            print(f"  {c['chinese']}")
+    
+    if result['sets_chinese']:
         print("\nSets:")
-        for i, s in enumerate(result['sets'], 1):
-            print(f"\n  Set {i}:")
-            for card in s:
-                print(f"    - {card}")
+        for i, s in enumerate(result['sets_chinese'], 1):
+            print(f"  Set {i}: {' + '.join(s)}")
 
 
 if __name__ == "__main__":
