@@ -24,6 +24,7 @@ from src.solver.set_finder import Card, Shape, Color, Number, Fill, find_all_set
 
 
 WEIGHTS_DIR = Path(__file__).parent.parent.parent / "weights"
+DATA_WEIGHTS_DIR = Path.home() / "data" / "set-solver" / "weights"
 
 # Chinese shorthand names: {1,2,3}-{实，空，线}-{红，绿，紫}-{菱，圆，弯}
 CHINESE_NUMBER = {"one": "1", "two": "2", "three": "3"}
@@ -68,7 +69,10 @@ class SetSolver:
         
         # Load detector
         if detector_path is None:
-            detector_path = WEIGHTS_DIR / "detector" / "weights" / "best.pt"
+            # Check ~/data first, then repo weights
+            data_path = DATA_WEIGHTS_DIR / "detector" / "weights" / "best.pt"
+            repo_path = WEIGHTS_DIR / "detector" / "weights" / "best.pt"
+            detector_path = data_path if data_path.exists() else repo_path
         print(f"Loading detector from {detector_path}")
         self.detector = YOLO(str(detector_path))
         
@@ -271,17 +275,23 @@ class SetSolver:
             attrs = c["attrs"]
             x1, y1, x2, y2 = card.bbox
             
-            # Determine box color
+            # Determine box color(s)
             if id(card) in card_colors:
                 colors = card_colors[id(card)]
-                color = colors[0]  # Primary color
                 width = 4
+                # Draw offset boxes for each set the card belongs to
+                for i, color in enumerate(colors):
+                    offset = i * 5  # Offset each box by 5 pixels
+                    draw.rectangle(
+                        [x1 - offset, y1 - offset, x2 + offset, y2 + offset], 
+                        outline=color, 
+                        width=width
+                    )
+                color = colors[0]  # Use first color for label
             else:
                 color = (200, 200, 200)  # Gray for non-Set cards
                 width = 2
-            
-            # Draw box
-            draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
+                draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
             
             # Draw label (Chinese shorthand)
             label = card_to_chinese(attrs)

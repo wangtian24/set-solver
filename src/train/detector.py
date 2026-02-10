@@ -9,7 +9,7 @@ from ultralytics import YOLO
 
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "synthetic"
-WEIGHTS_DIR = Path(__file__).parent.parent.parent / "weights"
+DEFAULT_WEIGHTS_DIR = Path.home() / "data" / "set-solver" / "weights"
 
 
 def train_detector(
@@ -18,8 +18,15 @@ def train_detector(
     batch: int = 16,
     model_size: str = "n",  # n=nano, s=small, m=medium
     device: str = "auto",  # auto, mps, cpu, cuda
+    weights_dir: Path = None,
 ):
     """Train YOLOv8 on synthetic board images."""
+    
+    # Use default weights dir if not specified
+    if weights_dir is None:
+        weights_dir = DEFAULT_WEIGHTS_DIR
+    weights_dir = Path(weights_dir)
+    weights_dir.mkdir(parents=True, exist_ok=True)
     
     # Auto-detect best device
     if device == "auto":
@@ -32,6 +39,7 @@ def train_detector(
             device = "cpu"
     
     print(f"Using device: {device}")
+    print(f"Saving weights to: {weights_dir}")
     
     # Load pretrained YOLOv8
     model = YOLO(f"yolo11{model_size}.pt")
@@ -43,7 +51,7 @@ def train_detector(
         imgsz=imgsz,
         batch=batch,
         device=device,
-        project=str(WEIGHTS_DIR),
+        project=str(weights_dir),
         name="detector",
         exist_ok=True,
         patience=20,  # Early stopping
@@ -52,7 +60,7 @@ def train_detector(
     )
     
     print(f"\nTraining complete!")
-    print(f"Best model: {WEIGHTS_DIR / 'detector' / 'weights' / 'best.pt'}")
+    print(f"Best model: {weights_dir / 'detector' / 'weights' / 'best.pt'}")
     
     return results
 
@@ -66,6 +74,10 @@ def main():
     parser.add_argument("--imgsz", type=int, default=640, help="Image size")
     parser.add_argument("--model", type=str, default="n", choices=["n", "s", "m"], 
                         help="Model size (n=nano, s=small, m=medium)")
+    parser.add_argument("--device", type=str, default="auto", 
+                        help="Device (auto, mps, cpu, cuda)")
+    parser.add_argument("--project", type=str, default=None,
+                        help=f"Weights directory (default: {DEFAULT_WEIGHTS_DIR})")
     args = parser.parse_args()
     
     train_detector(
@@ -73,6 +85,8 @@ def main():
         batch=args.batch,
         imgsz=args.imgsz,
         model_size=args.model,
+        device=args.device,
+        weights_dir=args.project,
     )
 
 

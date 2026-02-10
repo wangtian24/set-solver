@@ -41,22 +41,29 @@ Trained on 1000 synthetic board images with realistic augmentations.
 
 ## Training Pipeline
 
+**Models are saved to `~/data/set-solver/weights/`** (outside repo for safety).
+
 ### 1. Train Classifier
 ```bash
 python -m src.train.classifier
-# → weights/classifier_best.pt
+# Time: ~5-10 min (30 epochs)
+# Output: ~/data/set-solver/weights/classifier_best.pt
+# Data: training_images/ (real card photos, 81 classes)
 ```
 
 ### 2. Generate Synthetic Boards
 ```bash
 python -m src.generate.board_generator --num 1000 --layout grid
-# → data/synthetic/ with YOLO-format annotations
+# Time: ~2-3 min
+# Output: data/synthetic/ with YOLO-format annotations
 ```
 
 ### 3. Train Detector
 ```bash
 python -m src.train.detector --epochs 10
-# → weights/detector/weights/best.pt
+# Time: ~8-10 min on MPS (Apple Silicon), ~15-20 min on CPU
+# Output: ~/data/set-solver/weights/detector/weights/best.pt
+# Data: data/synthetic/ (generated boards)
 ```
 
 ### 4. Generate Showcase
