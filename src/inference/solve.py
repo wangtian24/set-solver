@@ -268,7 +268,7 @@ def main():
     parser = argparse.ArgumentParser(description="Solve Set game from image")
     parser.add_argument("image", type=str, help="Path to input image")
     parser.add_argument("--output", "-o", type=str, help="Path to save output image")
-    parser.add_argument("--conf", type=float, default=0.5, help="Detection confidence")
+    parser.add_argument("--conf", type=float, default=0.25, help="Detection confidence")
     parser.add_argument("--show", action="store_true", help="Display result")
     args = parser.parse_args()
     
