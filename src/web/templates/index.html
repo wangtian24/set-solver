@@ -15,16 +15,32 @@
     width: 100vw;
     display: flex;
     flex-direction: column;
-    align-items: center;
+  }
+  #trophy {
+    display: none;
+    flex-direction: row;
     justify-content: center;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    background: #111;
+    flex-shrink: 0;
+  }
+  #trophy.active { display: flex; }
+  #trophy img {
+    height: 60px;
+    max-width: 30vw;
+    border-radius: 4px;
+    border: 2px solid #4f4;
+    object-fit: contain;
   }
   #camera-container {
     position: relative;
-    width: 100%;
-    height: 100%;
+    flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
+    overflow: hidden;
   }
   video, #result-img {
     max-width: 100%;
@@ -32,48 +48,73 @@
     object-fit: contain;
   }
   #result-img { display: none; }
-  #overlay {
+  #bottom-bar {
     position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-    display: none;
+    bottom: 0; left: 0; right: 0;
+    display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    background: rgba(0,0,0,0.5);
-    z-index: 10;
+    padding-bottom: 16px;
+    z-index: 15;
+    pointer-events: none;
   }
-  #overlay.active { display: flex; }
-  #sets-list {
-    background: rgba(0,0,0,0.8);
-    border-radius: 12px;
-    padding: 16px 24px;
-    margin: 16px;
-    max-width: 90%;
-    font-size: 18px;
-    line-height: 1.6;
+  #set-nav {
+    display: none;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+    pointer-events: auto;
+  }
+  #set-nav.active { display: flex; }
+  #set-nav .nav-arrow {
+    background: rgba(255,255,255,0.2);
+    border: none;
+    color: #fff;
+    font-size: 22px;
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #set-nav .nav-arrow:active { background: rgba(255,255,255,0.4); }
+  #set-label {
+    font-size: 14px;
+    color: #ccc;
+    min-width: 100px;
     text-align: center;
   }
-  #sets-list h2 { margin-bottom: 8px; font-size: 22px; }
-  .set-row { color: #4f4; }
-  #continue-btn {
-    background: #4f4;
-    color: #000;
+  #scan-btn {
     border: none;
-    border-radius: 24px;
-    padding: 14px 40px;
+    border-radius: 28px;
+    padding: 14px 48px;
     font-size: 18px;
     font-weight: 600;
     cursor: pointer;
-    margin-top: 12px;
+    transition: background 0.2s;
+    pointer-events: auto;
   }
-  #continue-btn:active { opacity: 0.7; }
+  #scan-btn.start {
+    background: #4f4;
+    color: #000;
+  }
+  #scan-btn.stop {
+    background: #f44;
+    color: #fff;
+  }
+  #scan-btn.restart {
+    background: #ff0;
+    color: #000;
+  }
+  #scan-btn:active { opacity: 0.7; }
   #status-bar {
     position: absolute;
-    top: 12px; left: 12px;
+    top: 8px; left: 8px;
     background: rgba(0,0,0,0.6);
     border-radius: 8px;
-    padding: 6px 12px;
-    font-size: 14px;
+    padding: 4px 10px;
+    font-size: 13px;
     z-index: 5;
   }
   #status-bar .dot {
@@ -86,9 +127,11 @@
   .dot.active { background: #4f4; }
   .dot.inactive { background: #f44; }
   .dot.processing { background: #ff4; }
+  .dot.idle { background: #888; }
 </style>
 </head>
 <body>
+  <div id="trophy"></div>
   <div id="camera-container">
     <video id="video" autoplay playsinline muted></video>
     <img id="result-img" alt="Result">
@@ -96,9 +139,13 @@
       <span class="dot inactive" id="status-dot"></span>
       <span id="status-text">Starting camera...</span>
     </div>
-    <div id="overlay">
-      <div id="sets-list"></div>
-      <button id="continue-btn">Continue</button>
+    <div id="bottom-bar">
+      <div id="set-nav">
+        <button class="nav-arrow" id="prev-btn">&larr;</button>
+        <span id="set-label"></span>
+        <button class="nav-arrow" id="next-btn">&rarr;</button>
+      </div>
+      <button id="scan-btn" class="start">Start</button>
     </div>
   </div>
 
@@ -107,50 +154,107 @@
 <script>
 const video = document.getElementById('video');
 const resultImg = document.getElementById('result-img');
-const overlay = document.getElementById('overlay');
-const setsList = document.getElementById('sets-list');
-const continueBtn = document.getElementById('continue-btn');
+const trophy = document.getElementById('trophy');
+const setNav = document.getElementById('set-nav');
+const setLabel = document.getElementById('set-label');
+const prevBtn = document.getElementById('prev-btn');
+const nextBtn = document.getElementById('next-btn');
+const scanBtn = document.getElementById('scan-btn');
 const statusDot = document.getElementById('status-dot');
 const statusText = document.getElementById('status-text');
 const canvas = document.getElementById('capture-canvas');
 
 let stream = null;
-let frozen = false;
+let scanning = false;
 let processing = false;
+let frozen = false;  // true when showing results
 let loopTimer = null;
 
+// Result state for cycling through sets
+let resultData = null;
+let currentSetIdx = 0;
+
 async function startCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    statusDot.className = 'dot inactive';
+    statusText.textContent = 'Camera API unavailable — use https://';
+    console.error('mediaDevices not available. Page must be served over HTTPS (or localhost).');
+    return;
+  }
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
       audio: false,
     });
+    for (const track of stream.getVideoTracks()) {
+      const caps = track.getCapabilities?.() || {};
+      const settings = {};
+      if ('backgroundBlur' in caps) settings.backgroundBlur = false;
+      if ('faceFraming' in caps) settings.faceFraming = false;
+      if ('pan' in caps) settings.pan = track.getSettings().pan;
+      if ('tilt' in caps) settings.tilt = track.getSettings().tilt;
+      if ('zoom' in caps) settings.zoom = track.getSettings().zoom;
+      if (Object.keys(settings).length > 0) {
+        try { await track.applyConstraints({ advanced: [settings] }); } catch (e) { /* ignore */ }
+      }
+    }
     video.srcObject = stream;
     await video.play();
-    statusDot.className = 'dot active';
-    statusText.textContent = 'Scanning...';
-    startLoop();
+    statusDot.className = 'dot idle';
+    statusText.textContent = 'Ready — press Start';
   } catch (err) {
     statusDot.className = 'dot inactive';
-    statusText.textContent = 'Camera access denied';
+    statusText.textContent = 'Camera access denied — check browser permissions';
     console.error('Camera error:', err);
   }
 }
 
-function startLoop() {
+function restart() {
+  // Go from frozen results back to live camera (not scanning yet)
+  frozen = false;
+  scanning = false;
+  resultData = null;
+  currentSetIdx = 0;
+  trophy.classList.remove('active');
+  trophy.innerHTML = '';
+  setNav.classList.remove('active');
+  resultImg.style.display = 'none';
+  video.style.display = 'block';
+
+  scanBtn.textContent = 'Start';
+  scanBtn.className = 'start';
+  statusDot.className = 'dot idle';
+  statusText.textContent = 'Ready — press Start';
+}
+
+function startScanning() {
+  scanning = true;
+  scanBtn.textContent = 'Stop';
+  scanBtn.className = 'stop';
+  statusDot.className = 'dot active';
+  statusText.textContent = 'Scanning...';
+
   if (loopTimer) clearInterval(loopTimer);
   loopTimer = setInterval(() => {
-    if (!frozen && !processing) captureAndSolve();
-  }, 333); // ~3fps
+    if (scanning && !processing) captureAndSolve();
+  }, 333);
+}
+
+function stopScanning() {
+  scanning = false;
+  if (loopTimer) { clearInterval(loopTimer); loopTimer = null; }
+  scanBtn.textContent = 'Start';
+  scanBtn.className = 'start';
+  statusDot.className = 'dot idle';
+  statusText.textContent = 'Stopped';
 }
 
 async function captureAndSolve() {
-  if (frozen || processing) return;
+  if (!scanning || processing) return;
   processing = true;
   statusDot.className = 'dot processing';
 
   try {
-    // Capture frame
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext('2d');
@@ -164,49 +268,79 @@ async function captureAndSolve() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
 
+    if (!scanning) return;
+
     statusText.textContent = `${data.num_cards} cards`;
     statusDot.className = 'dot active';
 
     if (data.num_sets > 0) {
-      freeze(data);
+      showResult(data);
     }
   } catch (err) {
     console.error('Solve error:', err);
-    statusDot.className = 'dot active';
+    if (scanning) statusDot.className = 'dot active';
   } finally {
     processing = false;
   }
 }
 
-function freeze(data) {
+function showResult(data) {
+  scanning = false;
   frozen = true;
+  if (loopTimer) { clearInterval(loopTimer); loopTimer = null; }
 
-  // Show annotated result image
+  resultData = data;
+  currentSetIdx = 0;
+
   video.style.display = 'none';
   resultImg.style.display = 'block';
-  resultImg.src = 'data:image/jpeg;base64,' + data.result_image_b64;
 
-  // Build sets list
-  let html = `<h2>Found ${data.num_sets} Set${data.num_sets > 1 ? 's' : ''}!</h2>`;
-  data.sets_chinese.forEach((s, i) => {
-    html += `<div class="set-row">Set ${i + 1}: ${s.join(' + ')}</div>`;
-  });
-  setsList.innerHTML = html;
-  overlay.classList.add('active');
+  // Show nav if multiple sets
+  if (data.num_sets > 1) {
+    setNav.classList.add('active');
+  }
 
+  showCurrentSet();
+
+  scanBtn.textContent = 'Restart';
+  scanBtn.className = 'restart';
   statusDot.className = 'dot active';
-  statusText.textContent = `${data.num_sets} Set${data.num_sets > 1 ? 's' : ''} found!`;
+  statusText.textContent = `Found ${data.num_sets} Set${data.num_sets > 1 ? 's' : ''}!`;
 
-  // Speak "Set!"
   speak('Set!');
 }
 
-function unfreeze() {
-  frozen = false;
-  overlay.classList.remove('active');
-  resultImg.style.display = 'none';
-  video.style.display = 'block';
-  statusText.textContent = 'Scanning...';
+function showCurrentSet() {
+  if (!resultData) return;
+  const data = resultData;
+  const i = currentSetIdx;
+
+  // Show annotated image for this set
+  resultImg.src = 'data:image/jpeg;base64,' + data.result_images_b64[i];
+
+  // Show trophy cards for this set
+  const cards = data.per_set_cards_b64[i];
+  if (cards && cards.length === 3) {
+    trophy.innerHTML = cards
+      .map(b64 => `<img src="data:image/jpeg;base64,${b64}">`)
+      .join('');
+    trophy.classList.add('active');
+  }
+
+  // Update nav label
+  setLabel.textContent = `Set ${i + 1} / ${data.num_sets}`;
+}
+
+function prevSet() {
+  if (!resultData || resultData.num_sets <= 1) return;
+  currentSetIdx = (currentSetIdx - 1 + resultData.num_sets) % resultData.num_sets;
+  showCurrentSet();
+}
+
+function nextSet() {
+  if (!resultData || resultData.num_sets <= 1) return;
+  currentSetIdx = (currentSetIdx + 1) % resultData.num_sets;
+  showCurrentSet();
 }
 
 function speak(text) {
@@ -218,8 +352,30 @@ function speak(text) {
   }
 }
 
-continueBtn.addEventListener('click', unfreeze);
-document.addEventListener('keydown', e => { if (e.key === ' ' && frozen) unfreeze(); });
+scanBtn.addEventListener('click', () => {
+  if (frozen) {
+    restart();
+  } else if (scanning) {
+    stopScanning();
+  } else {
+    startScanning();
+  }
+});
+prevBtn.addEventListener('click', prevSet);
+nextBtn.addEventListener('click', nextSet);
+
+document.addEventListener('keydown', e => {
+  if (e.key === ' ') {
+    e.preventDefault();
+    if (frozen) restart();
+    else if (scanning) stopScanning();
+    else startScanning();
+  } else if (e.key === 'ArrowLeft') {
+    prevSet();
+  } else if (e.key === 'ArrowRight') {
+    nextSet();
+  }
+});
 
 startCamera();
 </script>

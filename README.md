@@ -25,9 +25,35 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Run on an image
+# Run on any image
 python -m src.inference.solve photo.jpg -o result.jpg --show
+
+# Options
+python -m src.inference.solve photo.jpg \
+  --output result.jpg \   # save annotated output
+  --conf 0.25 \           # detection confidence threshold (default: 0.25)
+  --show                  # open result in image viewer
 ```
+
+## Live Camera Web App
+
+A real-time web interface that uses your camera to scan for Sets continuously.
+
+```bash
+# Install web dependencies (not in requirements.txt)
+pip install fastapi uvicorn python-multipart
+
+# Start the server
+python -m src.web.app
+# → Open http://localhost:8000 in your browser
+```
+
+The web app will:
+- Request camera access (prefers rear camera on mobile)
+- Press **Start** (or spacebar) to begin scanning at ~3 fps
+- Automatically stop and announce "Set!" when valid Sets are found
+- Show annotated results with color-coded bounding boxes
+- Press **Start** again (or spacebar) to restart scanning
 
 ## Model Performance
 
@@ -101,7 +127,8 @@ set-solver/
 ├── src/
 │   ├── train/          # Training scripts
 │   ├── generate/       # Synthetic data generation
-│   └── inference/      # Solving pipeline
+│   ├── inference/      # Solving pipeline (CLI)
+│   └── web/            # Live camera web app (FastAPI)
 ├── scripts/            # Utilities
 ├── weights/            # Trained models
 ├── data/

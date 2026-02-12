@@ -97,22 +97,32 @@ class SetSolver:
     def detect_cards(self, image: Image.Image, conf: float = 0.5) -> List[dict]:
         """
         Detect cards in image.
-        
+
         Returns list of detections with bounding boxes.
+        Filters out oversized detections that likely merged two cards.
         """
         results = self.detector(image, conf=conf, verbose=False)
-        
+
         detections = []
         for result in results:
             boxes = result.boxes
             for box in boxes:
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                conf = box.conf[0].cpu().item()
+                c = box.conf[0].cpu().item()
+                w, h = x2 - x1, y2 - y1
                 detections.append({
                     "bbox": (int(x1), int(y1), int(x2), int(y2)),
-                    "confidence": conf,
+                    "confidence": c,
+                    "area": w * h,
                 })
-        
+
+        # Filter out merged detections: if a box is >2x the median area,
+        # it's likely covering two cards
+        if len(detections) >= 3:
+            areas = sorted(d["area"] for d in detections)
+            median_area = areas[len(areas) // 2]
+            detections = [d for d in detections if d["area"] <= median_area * 2.2]
+
         return detections
     
     def classify_card(self, card_image: Image.Image) -> dict:
@@ -186,7 +196,13 @@ class SetSolver:
         card_objects = [c["card"] for c in cards]
         sets = find_all_sets(card_objects)
 
-        result_image = self._draw_results(image, cards, sets)
+        # Generate one annotated image per set (each highlighting only that set)
+        result_images = []
+        if sets:
+            for i in range(len(sets)):
+                result_images.append(self._draw_results(image, cards, sets, highlight_idx=i))
+        else:
+            result_images.append(self._draw_results(image, cards, sets))
 
         return {
             "num_cards": len(cards),
@@ -208,7 +224,11 @@ class SetSolver:
                 [card_to_chinese(next(c["attrs"] for c in cards if c["card"] is card)) for card in s]
                 for s in sets
             ],
-            "result_image": result_image,
+            "sets_bboxes": [
+                [card.bbox for card in s]
+                for s in sets
+            ],
+            "result_images": result_images,
         }
 
     def solve(
@@ -297,11 +317,17 @@ class SetSolver:
         image: Image.Image,
         cards: List[dict],
         sets: List[Tuple[Card, Card, Card]],
+        highlight_idx: Optional[int] = None,
     ) -> Image.Image:
-        """Draw bounding boxes and Set highlights on image."""
+        """Draw bounding boxes and Set highlights on image.
+
+        Args:
+            highlight_idx: If set, only highlight this one set (0-based).
+                           If None, highlight all sets.
+        """
         result = image.copy()
         draw = ImageDraw.Draw(result)
-        
+
         # Try to load a Chinese-compatible font
         font = None
         font_paths = [
@@ -318,46 +344,43 @@ class SetSolver:
                 continue
         if font is None:
             font = ImageFont.load_default()
-        
-        # Map cards to Set colors (a card can be in multiple Sets)
-        card_colors = {}  # card -> list of colors
-        for i, card_set in enumerate(sets):
-            color = SET_COLORS[i % len(SET_COLORS)]
+
+        # Determine which set(s) to highlight
+        if highlight_idx is not None and 0 <= highlight_idx < len(sets):
+            highlighted_sets = [(highlight_idx, sets[highlight_idx])]
+        else:
+            highlighted_sets = list(enumerate(sets))
+
+        # Build set of highlighted card ids
+        highlighted_card_ids = set()
+        for _, card_set in highlighted_sets:
             for card in card_set:
-                if id(card) not in card_colors:
-                    card_colors[id(card)] = []
-                card_colors[id(card)].append(color)
-        
-        # Draw all cards
+                highlighted_card_ids.add(id(card))
+
+        # Draw only highlighted cards
         for c in cards:
             card = c["card"]
+            if id(card) not in highlighted_card_ids:
+                continue
             attrs = c["attrs"]
             x1, y1, x2, y2 = card.bbox
-            
-            # Determine box color(s)
-            if id(card) in card_colors:
-                colors = card_colors[id(card)]
-                width = 4
-                # Draw offset boxes for each set the card belongs to
-                for i, color in enumerate(colors):
-                    offset = i * 5  # Offset each box by 5 pixels
-                    draw.rectangle(
-                        [x1 - offset, y1 - offset, x2 + offset, y2 + offset], 
-                        outline=color, 
-                        width=width
-                    )
-                color = colors[0]  # Use first color for label
-            else:
-                color = (200, 200, 200)  # Gray for non-Set cards
-                width = 2
-                draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
-            
-            # Draw label (Chinese shorthand)
+
+            color_idx = highlighted_sets[0][0] if len(highlighted_sets) == 1 else 0
+            for si, card_set in highlighted_sets:
+                if card in card_set:
+                    color_idx = si
+                    break
+            color = SET_COLORS[color_idx % len(SET_COLORS)]
+            draw.rectangle([x1, y1, x2, y2], outline=color, width=4)
+
             label = card_to_chinese(attrs)
             draw.text((x1, y1 - 20), label, fill=color, font=font)
-        
-        # Draw Set count
-        draw.text((10, 10), f"Found {len(sets)} Set(s)", fill=(255, 255, 255), font=font)
+
+        # Draw Set info
+        if highlight_idx is not None:
+            draw.text((10, 10), f"Set {highlight_idx + 1} / {len(sets)}", fill=(255, 255, 255), font=font)
+        else:
+            draw.text((10, 10), f"Found {len(sets)} Set(s)", fill=(255, 255, 255), font=font)
         
         return result
 
