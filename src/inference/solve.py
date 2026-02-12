@@ -373,7 +373,10 @@ class SetSolver:
             color = SET_COLORS[color_idx % len(SET_COLORS)]
             draw.rectangle([x1, y1, x2, y2], outline=color, width=4)
 
-            label = card_to_chinese(attrs)
+            det_conf = c["detection"]["confidence"]
+            cls_conf = min(attrs.get("number_conf", 1), attrs.get("color_conf", 1),
+                          attrs.get("shape_conf", 1), attrs.get("fill_conf", 1))
+            label = f"{card_to_chinese(attrs)} d{det_conf:.0%} c{cls_conf:.0%}"
             draw.text((x1, y1 - 20), label, fill=color, font=font)
 
         # Draw Set info
