@@ -108,6 +108,22 @@
     color: #000;
   }
   #scan-btn:active { opacity: 0.7; }
+  #snap-btn {
+    display: none;
+    border: none;
+    border-radius: 28px;
+    padding: 14px 36px;
+    font-size: 18px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+    pointer-events: auto;
+    background: #48f;
+    color: #fff;
+    margin-bottom: 8px;
+  }
+  #snap-btn.visible { display: block; }
+  #snap-btn:active { opacity: 0.7; }
   #status-bar {
     position: absolute;
     top: 8px; left: 8px;
@@ -145,6 +161,7 @@
         <span id="set-label"></span>
         <button class="nav-arrow" id="next-btn">&rarr;</button>
       </div>
+      <button id="snap-btn">Snap</button>
       <button id="scan-btn" class="start">Start</button>
     </div>
   </div>
@@ -160,6 +177,7 @@ const setLabel = document.getElementById('set-label');
 const prevBtn = document.getElementById('prev-btn');
 const nextBtn = document.getElementById('next-btn');
 const scanBtn = document.getElementById('scan-btn');
+const snapBtn = document.getElementById('snap-btn');
 const statusDot = document.getElementById('status-dot');
 const statusText = document.getElementById('status-text');
 const canvas = document.getElementById('capture-canvas');
@@ -223,6 +241,7 @@ function restart() {
 
   scanBtn.textContent = 'Start';
   scanBtn.className = 'start';
+  snapBtn.classList.remove('visible');
   statusDot.className = 'dot idle';
   statusText.textContent = 'Ready — press Start';
 }
@@ -231,6 +250,7 @@ function startScanning() {
   scanning = true;
   scanBtn.textContent = 'Stop';
   scanBtn.className = 'stop';
+  snapBtn.classList.add('visible');
   statusDot.className = 'dot active';
   statusText.textContent = 'Scanning...';
 
@@ -245,6 +265,7 @@ function stopScanning() {
   if (loopTimer) { clearInterval(loopTimer); loopTimer = null; }
   scanBtn.textContent = 'Start';
   scanBtn.className = 'start';
+  snapBtn.classList.remove('visible');
   statusDot.className = 'dot idle';
   statusText.textContent = 'Stopped';
 }
@@ -351,6 +372,62 @@ function speak(text) {
     speechSynthesis.speak(utter);
   }
 }
+
+async function snapAndSolve() {
+  // Stop continuous scanning
+  scanning = false;
+  if (loopTimer) { clearInterval(loopTimer); loopTimer = null; }
+  snapBtn.classList.remove('visible');
+
+  // Capture the current frame
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0);
+
+  // Freeze: show the captured frame as a still image
+  frozen = true;
+  const snapshotDataUrl = canvas.toDataURL('image/jpeg', 0.9);
+  resultImg.src = snapshotDataUrl;
+  resultImg.style.display = 'block';
+  video.style.display = 'none';
+
+  scanBtn.textContent = 'Restart';
+  scanBtn.className = 'restart';
+  statusDot.className = 'dot processing';
+  statusText.textContent = 'Detecting...';
+
+  try {
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+    const formData = new FormData();
+    formData.append('file', blob, 'frame.jpg');
+
+    const resp = await fetch('/api/solve', { method: 'POST', body: formData });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+
+    resultData = data;
+    currentSetIdx = 0;
+
+    if (data.num_sets > 0) {
+      resultImg.src = 'data:image/jpeg;base64,' + data.result_images_b64[0];
+      if (data.num_sets > 1) setNav.classList.add('active');
+      showCurrentSet();
+      statusDot.className = 'dot active';
+      statusText.textContent = `Found ${data.num_sets} Set${data.num_sets > 1 ? 's' : ''}!`;
+      speak('Set!');
+    } else {
+      statusDot.className = 'dot idle';
+      statusText.textContent = `${data.num_cards} cards — no Sets found`;
+    }
+  } catch (err) {
+    console.error('Snap solve error:', err);
+    statusDot.className = 'dot inactive';
+    statusText.textContent = 'Error — try again';
+  }
+}
+
+snapBtn.addEventListener('click', snapAndSolve);
 
 scanBtn.addEventListener('click', () => {
   if (frozen) {
