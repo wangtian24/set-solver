@@ -1,0 +1,18 @@
+.venv/
+.git/
+__pycache__/
+*.pyc
+data/
+training_images/
+docs/
+scripts/
+*.ipynb
+.DS_Store
+showcase.html
+
+# Training artifacts in weights/detector (keep only weights/*.pt)
+weights/detector/*.png
+weights/detector/*.jpg
+weights/detector/*.csv
+weights/detector/weights/last.pt
+weights/detector/weights/best.onnx
