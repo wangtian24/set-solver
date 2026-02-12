@@ -4,7 +4,9 @@ Vision-based solver for the [Set card game](https://www.setgame.com/).
 
 Take a photo of Set cards → Get all valid Sets highlighted.
 
-![Example](assets/example_result.png)
+![Example](example-detection.PNG)
+
+**[Try the live demo](https://huggingface.co/spaces/wangtianthu/set-solver)** | **[Download models](https://huggingface.co/wangtianthu/set-solver-models)**
 
 ## Features
 
