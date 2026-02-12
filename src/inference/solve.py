@@ -165,7 +165,8 @@ class SetSolver:
     def solve_from_image(
         self,
         image: Image.Image,
-        conf: float = 0.5,
+        conf: float = 0.7,
+        cls_conf: float = 0.8,
     ) -> dict:
         """
         Solve a Set game from a PIL Image directly.
@@ -173,6 +174,7 @@ class SetSolver:
         Args:
             image: PIL Image (RGB)
             conf: Detection confidence threshold
+            cls_conf: Classification confidence threshold (min across all attributes)
 
         Returns:
             Dict with detected cards, found Sets, and annotated result image
@@ -187,14 +189,18 @@ class SetSolver:
             card_crop = image.crop((x1, y1, x2, y2))
             attrs = self.classify_card(card_crop)
             card = self.detection_to_card(attrs, det["bbox"])
+            min_cls_conf = min(attrs.get("number_conf", 0), attrs.get("color_conf", 0),
+                               attrs.get("shape_conf", 0), attrs.get("fill_conf", 0))
             cards.append({
                 "card": card,
                 "attrs": attrs,
                 "detection": det,
+                "cls_confident": min_cls_conf >= cls_conf,
             })
 
-        card_objects = [c["card"] for c in cards]
-        sets = find_all_sets(card_objects)
+        # Only use cards that pass classification threshold for Set finding
+        confident_cards = [c["card"] for c in cards if c["cls_confident"]]
+        sets = find_all_sets(confident_cards)
 
         # Generate one annotated image per set (each highlighting only that set)
         result_images = []
@@ -357,21 +363,24 @@ class SetSolver:
             for card in card_set:
                 highlighted_card_ids.add(id(card))
 
-        # Draw only highlighted cards
+        # Draw all detected cards
         for c in cards:
             card = c["card"]
-            if id(card) not in highlighted_card_ids:
-                continue
             attrs = c["attrs"]
             x1, y1, x2, y2 = card.bbox
 
-            color_idx = highlighted_sets[0][0] if len(highlighted_sets) == 1 else 0
-            for si, card_set in highlighted_sets:
-                if card in card_set:
-                    color_idx = si
-                    break
-            color = SET_COLORS[color_idx % len(SET_COLORS)]
-            draw.rectangle([x1, y1, x2, y2], outline=color, width=4)
+            if id(card) in highlighted_card_ids:
+                color_idx = highlighted_sets[0][0] if len(highlighted_sets) == 1 else 0
+                for si, card_set in highlighted_sets:
+                    if card in card_set:
+                        color_idx = si
+                        break
+                color = SET_COLORS[color_idx % len(SET_COLORS)]
+                width = 4
+            else:
+                color = (128, 128, 128)
+                width = 2
+            draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
 
             det_conf = c["detection"]["confidence"]
             cls_conf = min(attrs.get("number_conf", 1), attrs.get("color_conf", 1),
@@ -381,9 +390,9 @@ class SetSolver:
 
         # Draw Set info
         if highlight_idx is not None:
-            draw.text((10, 10), f"Set {highlight_idx + 1} / {len(sets)}", fill=(255, 255, 255), font=font)
+            draw.text((10, 10), f"{len(cards)} cards — Set {highlight_idx + 1} / {len(sets)}", fill=(255, 255, 255), font=font)
         else:
-            draw.text((10, 10), f"Found {len(sets)} Set(s)", fill=(255, 255, 255), font=font)
+            draw.text((10, 10), f"{len(cards)} cards — {len(sets)} Set(s)", fill=(255, 255, 255), font=font)
         
         return result
 

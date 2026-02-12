@@ -45,7 +45,7 @@ async def solve_frame(file: UploadFile = File(...)):
     contents = await file.read()
     image = Image.open(io.BytesIO(contents)).convert("RGB")
 
-    result = solver.solve_from_image(image, conf=0.25)
+    result = solver.solve_from_image(image, conf=0.7, cls_conf=0.8)
 
     # Encode per-set annotated images as base64 JPEG
     result_images_b64 = []
